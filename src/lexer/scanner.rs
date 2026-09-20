@@ -141,7 +141,7 @@ impl<'a> Scanner<'a> {
 
     fn consume_segment(&mut self, kind: RawKind) -> Result<(), ScanError> {
         // Always consume the first (kind-deciding) character
-        self.advance();
+        let first = self.advance();
 
         match kind {
             RawKind::Quoted => loop {
@@ -186,7 +186,17 @@ impl<'a> Scanner<'a> {
             }
 
             RawKind::Symbol => {
-                // The single symbol character was already consumed at the top.
+                // Maximal munch: `<` `>` `!` may take a second char to form a
+                // two-char operator. `first` is non-empty whenever a kind was decided
+                let first = first.expect("symbol kind implies a first char");
+                if let Some(second) = self.peek()
+                    && matches!(
+                        (first, second),
+                        ('<', '=') | ('<', '>') | ('>', '=') | ('!', '=')
+                    )
+                {
+                    self.advance();
+                }
             }
         }
 
@@ -373,5 +383,71 @@ mod tests {
         let symbol = scanner.next_segment().unwrap().unwrap();
         assert_eq!(symbol.text, ",");
         assert_eq!(symbol.kind, RawKind::Symbol);
+    }
+
+    fn segments_of(input: &str) -> Vec<(RawKind, &str)> {
+        let mut scanner = Scanner::new(input);
+        let mut out = Vec::new();
+        while let Some(segment) = scanner.next_segment().unwrap() {
+            out.push((segment.kind, segment.text));
+        }
+        out
+    }
+
+    #[test]
+    fn two_char_operators_scan_as_single_symbols() {
+        let tokens = segments_of("a<=b, c>=d, e<>f, g!=h");
+        assert_eq!(
+            tokens,
+            vec![
+                (RawKind::Word, "a"),
+                (RawKind::Symbol, "<="),
+                (RawKind::Word, "b"),
+                (RawKind::Symbol, ","),
+                (RawKind::Word, "c"),
+                (RawKind::Symbol, ">="),
+                (RawKind::Word, "d"),
+                (RawKind::Symbol, ","),
+                (RawKind::Word, "e"),
+                (RawKind::Symbol, "<>"),
+                (RawKind::Word, "f"),
+                (RawKind::Symbol, ","),
+                (RawKind::Word, "g"),
+                (RawKind::Symbol, "!="),
+                (RawKind::Word, "h"),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_operator_symbol_pairs_do_not_fuse() {
+        let tokens = segments_of("a == b => c !> d");
+        assert_eq!(
+            tokens,
+            vec![
+                (RawKind::Word, "a"),
+                (RawKind::Symbol, "="),
+                (RawKind::Symbol, "="),
+                (RawKind::Word, "b"),
+                (RawKind::Symbol, "="),
+                (RawKind::Symbol, ">"),
+                (RawKind::Word, "c"),
+                (RawKind::Symbol, "!"),
+                (RawKind::Symbol, ">"),
+                (RawKind::Word, "d"),
+            ]
+        );
+    }
+
+    #[test]
+    fn bang_alone_stays_a_single_symbol() {
+        let tokens = segments_of("a!");
+        assert_eq!(tokens, vec![(RawKind::Word, "a"), (RawKind::Symbol, "!")]);
+    }
+
+    #[test]
+    fn operator_fusion_is_independent_of_whitespace() {
+        assert_eq!(segments_of("a<=b"), segments_of("a <= b"));
+        assert_eq!(segments_of("c!=d"), segments_of("c != d"));
     }
 }

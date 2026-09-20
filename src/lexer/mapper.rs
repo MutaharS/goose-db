@@ -15,7 +15,7 @@ pub enum Keyword {
     Where,
 }
 
-/// Structural punctuation and single-character operators.
+/// Structural punctuation, single- and multi-character operators.
 #[derive(Debug, PartialEq)]
 pub enum Punctuation {
     /// `*`
@@ -34,6 +34,12 @@ pub enum Punctuation {
     LessThan,
     /// `>`
     GreaterThan,
+    /// `>=`
+    GreaterThanEqual,
+    /// `<>`
+    NotEqual,
+    /// `<=`
+    LessThanEqual,
     /// `;`
     Semicolon,
 }
@@ -106,7 +112,11 @@ fn token_mapper<'a>(segment: &Segment<'a>) -> SQLToken<'a> {
             "<" => SQLToken::Punctuation(Punctuation::LessThan),
             ">" => SQLToken::Punctuation(Punctuation::GreaterThan),
 
-            // TODO: multi-char ops (<=, !=, <>) need a scanner rule, not a mapper arm
+            // multi-char ops (<=, !=, <>)
+            "<>" => SQLToken::Punctuation(Punctuation::NotEqual),
+            "!=" => SQLToken::Punctuation(Punctuation::NotEqual),
+            ">=" => SQLToken::Punctuation(Punctuation::GreaterThanEqual),
+            "<=" => SQLToken::Punctuation(Punctuation::LessThanEqual),
 
             // TODO: add operators and remaining punctuation.
             _ => SQLToken::Undefined(segment.text),
@@ -146,19 +156,34 @@ mod tests {
 
     #[test]
     fn select_keyword_is_case_insensitive() {
-        assert_eq!(classify("SELECT", RawKind::Word), SQLToken::Keyword(Keyword::Select));
-        assert_eq!(classify("select", RawKind::Word), SQLToken::Keyword(Keyword::Select));
-        assert_eq!(classify("SeLeCt", RawKind::Word), SQLToken::Keyword(Keyword::Select));
+        assert_eq!(
+            classify("SELECT", RawKind::Word),
+            SQLToken::Keyword(Keyword::Select)
+        );
+        assert_eq!(
+            classify("select", RawKind::Word),
+            SQLToken::Keyword(Keyword::Select)
+        );
+        assert_eq!(
+            classify("SeLeCt", RawKind::Word),
+            SQLToken::Keyword(Keyword::Select)
+        );
     }
 
     #[test]
     fn where_keyword_is_recognized() {
-        assert_eq!(classify("WHERE", RawKind::Word), SQLToken::Keyword(Keyword::Where));
+        assert_eq!(
+            classify("WHERE", RawKind::Word),
+            SQLToken::Keyword(Keyword::Where)
+        );
     }
 
     #[test]
     fn unknown_word_is_an_identifier() {
-        assert_eq!(classify("user_id", RawKind::Word), SQLToken::Identifier("user_id"));
+        assert_eq!(
+            classify("user_id", RawKind::Word),
+            SQLToken::Identifier("user_id")
+        );
     }
 
     #[test]
@@ -171,15 +196,50 @@ mod tests {
 
     #[test]
     fn numeric_segment_is_a_numeric_literal() {
-        assert_eq!(classify("42", RawKind::Number), SQLToken::NumericLiteral("42"));
+        assert_eq!(
+            classify("42", RawKind::Number),
+            SQLToken::NumericLiteral("42")
+        );
     }
 
     #[test]
     fn known_symbols_map_to_punctuation() {
-        assert_eq!(classify(",", RawKind::Symbol), SQLToken::Punctuation(Punctuation::Comma));
-        assert_eq!(classify("=", RawKind::Symbol), SQLToken::Punctuation(Punctuation::Equals));
-        assert_eq!(classify("*", RawKind::Symbol), SQLToken::Punctuation(Punctuation::Star));
-        assert_eq!(classify(";", RawKind::Symbol), SQLToken::Punctuation(Punctuation::Semicolon));
+        assert_eq!(
+            classify(",", RawKind::Symbol),
+            SQLToken::Punctuation(Punctuation::Comma)
+        );
+        assert_eq!(
+            classify("=", RawKind::Symbol),
+            SQLToken::Punctuation(Punctuation::Equals)
+        );
+        assert_eq!(
+            classify("*", RawKind::Symbol),
+            SQLToken::Punctuation(Punctuation::Star)
+        );
+        assert_eq!(
+            classify(";", RawKind::Symbol),
+            SQLToken::Punctuation(Punctuation::Semicolon)
+        );
+    }
+
+    #[test]
+    fn multi_char_operators_map_to_punctuation() {
+        assert_eq!(
+            classify("<=", RawKind::Symbol),
+            SQLToken::Punctuation(Punctuation::LessThanEqual)
+        );
+        assert_eq!(
+            classify(">=", RawKind::Symbol),
+            SQLToken::Punctuation(Punctuation::GreaterThanEqual)
+        );
+        assert_eq!(
+            classify("<>", RawKind::Symbol),
+            SQLToken::Punctuation(Punctuation::NotEqual)
+        );
+        assert_eq!(
+            classify("!=", RawKind::Symbol),
+            SQLToken::Punctuation(Punctuation::NotEqual)
+        );
     }
 
     #[test]
