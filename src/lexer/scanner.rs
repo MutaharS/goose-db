@@ -1,9 +1,11 @@
+use crate::errors::errors::ScanError;
+
 /// How a segment was scanned, decided purely by its character structure.
 ///
 /// This is a low-level hint only: it records *how* a run of characters was
 /// delimited, not what the text means. Semantic classification (keyword vs
 /// identifier vs literal) is the mapper's job.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum RawKind {
     /// A run of letters, digits, and underscores, e.g. `user_id`.
     Word,
@@ -20,7 +22,7 @@ pub enum RawKind {
 /// `text` is borrowed directly from the source, so scanning allocates
 /// nothing. The position fields exist so that future parser error messages
 /// can point at an exact location in the input.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Segment<'a> {
     /// The raw text of the run, borrowed from the input.
     pub text: &'a str,
@@ -48,6 +50,7 @@ pub struct Scanner<'a> {
     col: u32,
 }
 
+// " SELECT   user_id  FROM table WHERE col = 'rejuvenating drink' AND year = '2026'  "
 impl<'a> Scanner<'a> {
     /// Creates a scanner positioned at the very start of `input`.
     pub fn new(input: &'a str) -> Self {
@@ -60,7 +63,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// Scans and returns the next meaningful segment, or `None` at end of input.
-    pub fn next_segment(&mut self) -> Option<Segment<'a>> {
+    pub fn next_segment(&mut self) -> Result<Option<Segment<'a>>, ScanError> {
         // TODO:
         //   1. Skip any leading whitespace (keeping `line`/`col` correct while doing so).
         //   2. Decide the RawKind from the first remaining char:
@@ -71,7 +74,51 @@ impl<'a> Scanner<'a> {
         //   3. Consume chars for as long as the run *continues* under that kind's
         //      boundary rules (for Quoted, that means until the closing quote).
         //   4. Emit Segment { text: &self.input[start..self.pos], start, line, col, kind }.
-        todo!("scan a raw run")
+
+        // Consume whitespace
+        while let Some(c) = self.peek() {
+            if c.is_whitespace() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        // Build segment
+        let start = self.pos; // Set the start at the current position
+        let start_line = self.line;
+        let start_col = self.col;
+
+        // Build next Segment, or possibly we gracefully exit if we have reached the end of the input stream
+        let Some(first) = self.peek() else {
+            return Ok(None);
+        };
+
+        // Decide the kind
+        let kind: RawKind;
+        if first.is_alphabetic() || first == '_' {
+            kind = RawKind::Word;
+        } else if first.is_ascii_digit() {
+            kind = RawKind::Number;
+        } else if first == '\'' {
+            kind = RawKind::Quoted;
+        } else {
+            kind = RawKind::Symbol
+        }
+
+        // We consume characters for this segment based on the RawKind
+        self.consume_segment(kind)?;
+
+        // Build the segment to return
+        let segment = Segment {
+            text: self.input.get(start..self.pos).ok_or(ScanError)?,
+            start: start,
+            line: start_line,
+            col: start_col,
+            kind: kind,
+        };
+
+        return Ok(Some(segment));
     }
 
     /// Peeks the next character without consuming it.
@@ -90,5 +137,241 @@ impl<'a> Scanner<'a> {
             self.col += 1;
         }
         Some(ch)
+    }
+
+    fn consume_segment(&mut self, kind: RawKind) -> Result<(), ScanError> {
+        // Always consume the first (kind-deciding) character
+        self.advance();
+
+        match kind {
+            RawKind::Quoted => loop {
+                match self.peek() {
+                    Some('\'') => {
+                        self.advance(); // consume the closing quote
+                        break;
+                    }
+                    Some(_) => {
+                        self.advance(); // part of the literal body
+                    }
+                    None => return Err(ScanError), // unterminated string literal
+                }
+            },
+
+            RawKind::Word => loop {
+                // TODO: consume while the run continues (alphanumeric / '_')
+                match self.peek() {
+                    Some(val) if val == '_' || val.is_alphanumeric() => {
+                        self.advance();
+                    }
+                    _ => break,
+                }
+            },
+
+            RawKind::Number => {
+                // Consume the digit run.
+                while let Some(val) = self.peek() {
+                    if val.is_ascii_digit() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                // An identifier cannot start with a digit, so a letter or
+                // underscore immediately after the digits is a malformed
+                // token (e.g. `123abc`).
+                if matches!(self.peek(), Some(c) if c.is_alphanumeric() || c == '_') {
+                    return Err(ScanError);
+                }
+            }
+
+            RawKind::Symbol => {
+                // The single symbol character was already consumed at the top.
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peek_returns_none_at_end_of_input() {
+        let scanner = Scanner::new("");
+        assert_eq!(scanner.peek(), None);
+    }
+
+    #[test]
+    fn peek_does_not_consume() {
+        let scanner = Scanner::new("ab");
+        assert_eq!(scanner.peek(), Some('a'));
+        assert_eq!(scanner.peek(), Some('a'));
+        assert_eq!(scanner.pos, 0);
+    }
+
+    #[test]
+    fn advance_consumes_chars_in_order() {
+        let mut scanner = Scanner::new("ab");
+        assert_eq!(scanner.advance(), Some('a'));
+        assert_eq!(scanner.advance(), Some('b'));
+        assert_eq!(scanner.advance(), None);
+    }
+
+    #[test]
+    fn advance_tracks_line_and_col_across_newlines() {
+        let mut scanner = Scanner::new("a\nbb");
+        scanner.advance();
+        assert_eq!((scanner.line, scanner.col), (1, 2));
+
+        scanner.advance();
+        assert_eq!((scanner.line, scanner.col), (2, 1));
+
+        scanner.advance();
+        assert_eq!((scanner.line, scanner.col), (2, 2));
+    }
+
+    #[test]
+    fn advance_counts_multibyte_utf8_as_one_char() {
+        let mut scanner = Scanner::new("é");
+        assert_eq!(scanner.advance(), Some('é'));
+        assert_eq!(scanner.pos, 2);
+    }
+
+    #[test]
+    fn next_segment_is_none_for_empty_input() {
+        let mut scanner = Scanner::new("");
+        assert_eq!(scanner.next_segment().unwrap(), None);
+    }
+
+    #[test]
+    fn next_segment_is_none_for_whitespace_only_input() {
+        let mut scanner = Scanner::new("   \n\t ");
+        assert_eq!(scanner.next_segment().unwrap(), None);
+    }
+
+    #[test]
+    fn scans_a_word_with_position() {
+        let mut scanner = Scanner::new("page");
+        let segment = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(
+            segment,
+            Segment {
+                text: "page",
+                start: 0,
+                line: 1,
+                col: 1,
+                kind: RawKind::Word,
+            }
+        );
+    }
+
+    #[test]
+    fn word_segment_records_start_position_after_whitespace() {
+        let mut scanner = Scanner::new("  co");
+        let segment = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(segment.text, "co");
+        assert_eq!(segment.start, 2);
+        assert_eq!(segment.col, 3);
+    }
+
+    #[test]
+    fn scans_a_quoted_string() {
+        let mut scanner = Scanner::new("'active'");
+        let segment = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(
+            segment,
+            Segment {
+                text: "'active'",
+                start: 0,
+                line: 1,
+                col: 1,
+                kind: RawKind::Quoted,
+            }
+        );
+    }
+
+    #[test]
+    fn quoted_string_with_spaces_is_one_segment() {
+        let mut scanner = Scanner::new("'rejuvenating drink'");
+        let segment = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(segment.kind, RawKind::Quoted);
+        assert_eq!(segment.text, "'rejuvenating drink'");
+    }
+
+    #[test]
+    fn unterminated_quoted_string_is_an_error() {
+        let mut scanner = Scanner::new("'oops");
+        assert!(scanner.next_segment().is_err());
+    }
+
+    #[test]
+    fn scans_a_number() {
+        let mut scanner = Scanner::new("42");
+        let segment = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(
+            segment,
+            Segment {
+                text: "42",
+                start: 0,
+                line: 1,
+                col: 1,
+                kind: RawKind::Number,
+            }
+        );
+    }
+
+    #[test]
+    fn scans_a_single_char_symbol() {
+        let mut scanner = Scanner::new(",");
+        let segment = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(
+            segment,
+            Segment {
+                text: ",",
+                start: 0,
+                line: 1,
+                col: 1,
+                kind: RawKind::Symbol,
+            }
+        );
+    }
+
+    #[test]
+    fn word_boundary_stops_at_symbol() {
+        let mut scanner = Scanner::new("a,");
+        let word = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(word.text, "a");
+        assert_eq!(word.kind, RawKind::Word);
+
+        let symbol = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(symbol.text, ",");
+        assert_eq!(symbol.kind, RawKind::Symbol);
+    }
+
+    #[test]
+    fn digit_run_followed_by_letter_is_an_error() {
+        let mut scanner = Scanner::new("123abc");
+        assert!(scanner.next_segment().is_err());
+    }
+
+    #[test]
+    fn digit_run_followed_by_underscore_is_an_error() {
+        let mut scanner = Scanner::new("42_elephant");
+        assert!(scanner.next_segment().is_err());
+    }
+
+    #[test]
+    fn digit_run_before_symbol_is_not_an_error() {
+        let mut scanner = Scanner::new("123,");
+        let number = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(number.text, "123");
+        assert_eq!(number.kind, RawKind::Number);
+
+        let symbol = scanner.next_segment().unwrap().unwrap();
+        assert_eq!(symbol.text, ",");
+        assert_eq!(symbol.kind, RawKind::Symbol);
     }
 }

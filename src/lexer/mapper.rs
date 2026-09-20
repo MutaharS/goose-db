@@ -1,10 +1,11 @@
+use crate::errors::errors::ScanError;
 use crate::lexer::scanner::{RawKind, Scanner, Segment};
 
 /// SQL reserved words recognized by the tokenizer.
 ///
 /// Matching is case-insensitive, so `select`, `SELECT`, and `Select` all map
 /// to the same variant.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Keyword {
     Select,
     From,
@@ -15,7 +16,7 @@ pub enum Keyword {
 }
 
 /// Structural punctuation and single-character operators.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Punctuation {
     /// `*`
     Star,
@@ -42,7 +43,7 @@ pub enum Punctuation {
 /// Tokens borrow their payload text directly from the input string
 /// (zero-copy); the `'a` lifetime ties the token to the source query it was
 /// tokenized from.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SQLToken<'a> {
     /// A reserved word, e.g. `SELECT` or `WHERE`.
     Keyword(Keyword),
@@ -116,14 +117,73 @@ fn token_mapper<'a>(segment: &Segment<'a>) -> SQLToken<'a> {
 /// Tokenizes an entire input by pulling segments from `scanner` and mapping
 /// each one to a [`SQLToken`].
 ///
-/// Consumes the scanner; once the end of input is reached, further calls on
-/// the same scanner return an empty vector.
-pub fn tokenize<'a>(scanner: &mut Scanner<'a>) -> Vec<SQLToken<'a>> {
+/// Stops cleanly at end of input; tokenizing an already-drained scanner
+/// yields an empty vector. Any scanning error is propagated to the caller
+/// rather than swallowed here.
+pub fn tokenize<'a>(scanner: &mut Scanner<'a>) -> Result<Vec<SQLToken<'a>>, ScanError> {
     let mut tokens = Vec::new();
 
-    while let Some(segment) = scanner.next_segment() {
+    while let Some(segment) = scanner.next_segment()? {
         tokens.push(token_mapper(&segment));
     }
 
-    tokens
+    Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn classify(text: &'static str, kind: RawKind) -> SQLToken<'static> {
+        token_mapper(&Segment {
+            text,
+            start: 0,
+            line: 1,
+            col: 1,
+            kind,
+        })
+    }
+
+    #[test]
+    fn select_keyword_is_case_insensitive() {
+        assert_eq!(classify("SELECT", RawKind::Word), SQLToken::Keyword(Keyword::Select));
+        assert_eq!(classify("select", RawKind::Word), SQLToken::Keyword(Keyword::Select));
+        assert_eq!(classify("SeLeCt", RawKind::Word), SQLToken::Keyword(Keyword::Select));
+    }
+
+    #[test]
+    fn where_keyword_is_recognized() {
+        assert_eq!(classify("WHERE", RawKind::Word), SQLToken::Keyword(Keyword::Where));
+    }
+
+    #[test]
+    fn unknown_word_is_an_identifier() {
+        assert_eq!(classify("user_id", RawKind::Word), SQLToken::Identifier("user_id"));
+    }
+
+    #[test]
+    fn quoted_segment_is_a_string_literal() {
+        assert_eq!(
+            classify("'active'", RawKind::Quoted),
+            SQLToken::StringLiteral("'active'")
+        );
+    }
+
+    #[test]
+    fn numeric_segment_is_a_numeric_literal() {
+        assert_eq!(classify("42", RawKind::Number), SQLToken::NumericLiteral("42"));
+    }
+
+    #[test]
+    fn known_symbols_map_to_punctuation() {
+        assert_eq!(classify(",", RawKind::Symbol), SQLToken::Punctuation(Punctuation::Comma));
+        assert_eq!(classify("=", RawKind::Symbol), SQLToken::Punctuation(Punctuation::Equals));
+        assert_eq!(classify("*", RawKind::Symbol), SQLToken::Punctuation(Punctuation::Star));
+        assert_eq!(classify(";", RawKind::Symbol), SQLToken::Punctuation(Punctuation::Semicolon));
+    }
+
+    #[test]
+    fn unknown_symbol_stays_undefined() {
+        assert_eq!(classify("@", RawKind::Symbol), SQLToken::Undefined("@"));
+    }
 }

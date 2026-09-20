@@ -6,15 +6,12 @@ use std::fmt;
 /// Defined for future use; the tokenizer currently marks unknown input as
 /// `SQLToken::Undefined` instead of returning this error.
 #[derive(Debug)]
-pub struct MappingError;
+pub struct ScanError;
 
-impl fmt::Display for MappingError {
+impl fmt::Display for ScanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Ran into a mapping error during tokenization. Unable to map an input to SQLToken"
-        )
+        write!(f, "Ran into a scanner error. TODO: better error message")
     }
 }
 
-impl Error for MappingError {}
+impl Error for ScanError {}

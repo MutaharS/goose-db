@@ -1,16 +1,19 @@
-mod errors;
-mod lexer;
-
-use crate::lexer::mapper::{tokenize, SQLToken};
-use crate::lexer::scanner::Scanner;
+use goose_db::lexer::mapper::tokenize;
+use goose_db::lexer::scanner::Scanner;
 
 fn main() {
     let query = "SELECT user_id , temperature FROM table WHERE status = 'active'";
 
     let mut scanner = Scanner::new(query);
-    let tokens: Vec<SQLToken<'_>> = tokenize(&mut scanner);
-
-    for token in tokens {
-        println!("{:?}", token);
+    match tokenize(&mut scanner) {
+        Ok(tokens) => {
+            for token in tokens {
+                println!("{:?}", token);
+            }
+        }
+        Err(e) => {
+            eprintln!("tokenizer error: {e}");
+            std::process::exit(1);
+        }
     }
 }
