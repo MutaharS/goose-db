@@ -5,7 +5,7 @@ use crate::lexer::scanner::{RawKind, Scanner, Segment};
 ///
 /// Matching is case-insensitive, so `select`, `SELECT`, and `Select` all map
 /// to the same variant.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Keyword {
     Select,
     From,
@@ -13,6 +13,15 @@ pub enum Keyword {
     Into,
     Values,
     Where,
+    And,
+    Or,
+    Not,
+    Order,
+    By,
+    Asc,
+    Desc,
+    Limit,
+    As,
 }
 
 /// Structural punctuation, single- and multi-character operators.
@@ -86,6 +95,24 @@ fn token_mapper<'a>(segment: &Segment<'a>) -> SQLToken<'a> {
                 SQLToken::Keyword(Keyword::Values)
             } else if segment.text.eq_ignore_ascii_case("WHERE") {
                 SQLToken::Keyword(Keyword::Where)
+            } else if segment.text.eq_ignore_ascii_case("AND") {
+                SQLToken::Keyword(Keyword::And)
+            } else if segment.text.eq_ignore_ascii_case("OR") {
+                SQLToken::Keyword(Keyword::Or)
+            } else if segment.text.eq_ignore_ascii_case("NOT") {
+                SQLToken::Keyword(Keyword::Not)
+            } else if segment.text.eq_ignore_ascii_case("ORDER") {
+                SQLToken::Keyword(Keyword::Order)
+            } else if segment.text.eq_ignore_ascii_case("BY") {
+                SQLToken::Keyword(Keyword::By)
+            } else if segment.text.eq_ignore_ascii_case("ASC") {
+                SQLToken::Keyword(Keyword::Asc)
+            } else if segment.text.eq_ignore_ascii_case("DESC") {
+                SQLToken::Keyword(Keyword::Desc)
+            } else if segment.text.eq_ignore_ascii_case("LIMIT") {
+                SQLToken::Keyword(Keyword::Limit)
+            } else if segment.text.eq_ignore_ascii_case("AS") {
+                SQLToken::Keyword(Keyword::As)
             } else {
                 SQLToken::Identifier(segment.text)
             }
@@ -176,6 +203,25 @@ mod tests {
             classify("WHERE", RawKind::Word),
             SQLToken::Keyword(Keyword::Where)
         );
+    }
+
+    #[test]
+    fn clause_keywords_are_recognized_case_insensitively() {
+        let cases = [
+            ("AND", "and", Keyword::And),
+            ("OR", "or", Keyword::Or),
+            ("NOT", "not", Keyword::Not),
+            ("ORDER", "order", Keyword::Order),
+            ("BY", "by", Keyword::By),
+            ("ASC", "asc", Keyword::Asc),
+            ("DESC", "desc", Keyword::Desc),
+            ("LIMIT", "limit", Keyword::Limit),
+            ("AS", "as", Keyword::As),
+        ];
+        for (upper, lower, keyword) in cases {
+            assert_eq!(classify(upper, RawKind::Word), SQLToken::Keyword(keyword));
+            assert_eq!(classify(lower, RawKind::Word), SQLToken::Keyword(keyword));
+        }
     }
 
     #[test]

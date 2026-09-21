@@ -30,12 +30,12 @@ input &str ──► Scanner ──► Segment ──► Mapper ──► SQLTok
 ```
 
 1. **Scanner** (`src/lexer/scanner.rs`) — walks the input char-by-char and chops
-   it into **segments**: raw runs of text, decided by *structural* rules only.
+   it into **segments**: raw runs of text, decided by _structural_ rules only.
    It has no idea what `SELECT` means. It also tracks position (byte offset,
    line, column) so future error messages can point at the exact spot.
    Whitespace is skipped here, never emitted.
 2. **Mapper** (`src/lexer/mapper.rs`) — a pure function from `Segment` to
-   `SQLToken`. It applies *semantic* rules: is this scanned word a known
+   `SQLToken`. It applies _semantic_ rules: is this scanned word a known
    `Keyword`, or an `Identifier` instead? Same input, same output — no state.
 3. **Error layer** (`src/errors/errors.rs`) — `ScanError` sits at the top of the
    stack; `tokenize` propagates scan failures instead of swallowing them.
@@ -57,14 +57,14 @@ pub struct Segment<'a> {                            // Debug + PartialEq
 }
 ```
 
-The scanner's vocabulary is intentionally *low level*:
+The scanner's vocabulary is intentionally _low level_:
 
-| `RawKind` | How it was scanned |
-|---|---|
-| `Word`   | run of letters/digits/underscore, e.g. `user_id` |
-| `Number` | run of digits; a letter/underscore right after is an error (`123abc`) |
-| `Quoted` | everything up to the matching close quote, e.g. `'active'`; unterminated strings `Err` |
-| `Symbol` | a single punctuation/operator char, e.g. `,` `=` `(` `*` |
+| `RawKind` | How it was scanned                                                                     |
+| --------- | -------------------------------------------------------------------------------------- |
+| `Word`    | run of letters/digits/underscore, e.g. `user_id`                                       |
+| `Number`  | run of digits; a letter/underscore right after is an error (`123abc`)                  |
+| `Quoted`  | everything up to the matching close quote, e.g. `'active'`; unterminated strings `Err` |
+| `Symbol`  | a single punctuation/operator char, e.g. `,` `=` `(` `*`                               |
 
 `Keyword`, `Identifier`, and `Literal` are **mapper** concepts and never appear here.
 
@@ -92,30 +92,49 @@ like and break down the possible expressions/tokens that comprise it. In other
 words, we need a Context Free Grammar / Push Down Automaton that defines the
 valid sequences of SQL tokens.
 
+Conventions: `::=` defines a rule, `|` alternatives, `[ ... ]` optional,
+`"..."/'...'` literal tokens. Terminal tokens are handled by the lexer; the
+parser never sees characters, only the token stream.
+
 ```ebnf
-/* Top-Level Statements */
-<Statement>       ::= <SelectExpr> | <InsertStmt>
+(* Statements *)
+<Statement>     ::= <SelectStmt> | <InsertStmt>
 
-/* Core Query Expressions */
-<SelectExpr>      ::= "SELECT" <ColumnExpr> "FROM" <TableSource>
-<TableSource>     ::= <TableName> | "(" <SelectExpr> ")"
+(* SELECT *)
+<SelectStmt>    ::= "SELECT" <SelectList> "FROM" <TableSource>
+                    [ "WHERE" <Predicate> ]
+                    [ "ORDER BY" <OrderList> ]
+                    [ "LIMIT" <NumericLiteral> ]
+<SelectList>    ::= "*" | <SelectItem> | <SelectItem> "," <SelectList>
+<SelectItem>    ::= <ColumnRef> [ "AS" <Identifier> ]
+<ColumnRef>     ::= <Identifier> | <Identifier> "." <Identifier>
+<TableSource>   ::= <TableName> | "(" <SelectStmt> ")"
+<TableName>     ::= <Identifier>
+<OrderList>     ::= <OrderItem> | <OrderItem> "," <OrderList>
+<OrderItem>     ::= <ColumnRef> [ "ASC" | "DESC" ]
 
-<InsertStmt>      ::= "INSERT INTO" <TableName> <InsertBody>
-<InsertBody>      ::= <ValuesExpr> | <SelectExpr>
+(* WHERE — precedence layering, tightest binds last *)
+<Predicate>     ::= <OrExpr>
+<OrExpr>        ::= <AndExpr> | <OrExpr> "OR" <AndExpr>
+<AndExpr>       ::= <NotExpr> | <AndExpr> "AND" <NotExpr>
+<NotExpr>       ::= <Comparison> | "NOT" <NotExpr>
+<Comparison>    ::= <Expr> <CompareOp> <Expr> | "(" <Predicate> ")"
+<CompareOp>     ::= "=" | "<>" | "!=" | "<" | "<=" | ">" | ">="
+<Expr>          ::= <ColumnRef> | <StringLiteral> | <NumericLiteral>
 
-/* Column Expressions */
-<ColumnExpr>      ::= "*" | <ColumnList>
-<ColumnList>      ::= <ColumnItem> | <ColumnItem> "," <ColumnList>
-<ColumnItem>      ::= <Identifier> | <Identifier> "." <Identifier>
+(* INSERT *)
+<InsertStmt>    ::= "INSERT INTO" <TableName> [ "(" <ColumnList> ")" ]
+                    "VALUES" <TupleList>
+<ColumnList>    ::= <Identifier> | <Identifier> "," <ColumnList>
+<TupleList>     ::= <Tuple> | <Tuple> "," <TupleList>
+<Tuple>         ::= "(" <ValueList> ")"
+<ValueList>     ::= <Value> | <Value> "," <ValueList>
+<Value>         ::= <StringLiteral> | <NumericLiteral>
 
-/* Table & Values Terms */
-<TableName>       ::= <Identifier> | <Identifier> "." <Identifier>
-<ValuesExpr>      ::= "VALUES" "(" <ValueList> ")"
-<ValueList>       ::= <Literal> | <Literal> "," <ValueList>
-
-/* Terminal Tokens (Handled by Tokenizer/Lexer) */
+(* Terminal Tokens (Handled by Tokenizer/Lexer) *)
 <Identifier>      ::= [a-zA-Z_][a-zA-Z0-9_]*
-<Literal>         ::= STRING_LITERAL | NUMBER_LITERAL
+<StringLiteral>   ::= STRING_LITERAL
+<NumericLiteral>  ::= NUMBER_LITERAL
 ```
 
 ## Current Status
