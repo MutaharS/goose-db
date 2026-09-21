@@ -107,11 +107,14 @@ impl<'a> Scanner<'a> {
         }
 
         // We consume characters for this segment based on the RawKind
-        self.consume_segment(kind)?;
+        self.consume_segment(kind, start_line, start_col)?;
 
         // Build the segment to return
         let segment = Segment {
-            text: self.input.get(start..self.pos).ok_or(ScanError)?,
+            text: self
+                .input
+                .get(start..self.pos)
+                .expect("scanner positions always stay on valid UTF-8 boundaries"),
             start: start,
             line: start_line,
             col: start_col,
@@ -139,7 +142,12 @@ impl<'a> Scanner<'a> {
         Some(ch)
     }
 
-    fn consume_segment(&mut self, kind: RawKind) -> Result<(), ScanError> {
+    fn consume_segment(
+        &mut self,
+        kind: RawKind,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<(), ScanError> {
         // Always consume the first (kind-deciding) character
         let first = self.advance();
 
@@ -153,7 +161,12 @@ impl<'a> Scanner<'a> {
                     Some(_) => {
                         self.advance(); // part of the literal body
                     }
-                    None => return Err(ScanError), // unterminated string literal
+                    None => {
+                        return Err(ScanError::UnterminatedStringLiteral {
+                            line: start_line,
+                            col: start_col,
+                        });
+                    } // unterminated string literal
                 }
             },
 
@@ -181,7 +194,10 @@ impl<'a> Scanner<'a> {
                 // underscore immediately after the digits is a malformed
                 // token (e.g. `123abc`).
                 if matches!(self.peek(), Some(c) if c.is_alphanumeric() || c == '_') {
-                    return Err(ScanError);
+                    return Err(ScanError::IdentifierStartsWithDigit {
+                        line: start_line,
+                        col: start_col,
+                    });
                 }
             }
 
